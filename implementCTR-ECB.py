@@ -2,7 +2,7 @@ from PIL import Image
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-image_path = "C:\\Users\\hannane\\OneDrive\\Pictures\\Screenshots\\sharif.png"
+image_path = "your_image_path"
 image = Image.open(image_path)
 image_byte = image.tobytes()
 key = get_random_bytes(32)
