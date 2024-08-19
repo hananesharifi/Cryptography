@@ -1,0 +1,234 @@
+import argparse
+from Crypto.Cipher import AES
+
+plain_path = 'plaintext.example'
+cipher_path = 'ciphertext.example'
+
+def open_file_byte(file_path):
+    with open(file_path, 'r') as file:
+        file_string = file.read().strip()
+    file_string = ''.join(filter(lambda x: x in '01', file_string))
+    file_byte = int(file_string, 2).to_bytes((len(file_string) + 7) // 8, byteorder='big')
+    return file_byte
+
+def counter(index, nonce=b'\x00' * 8):
+    return nonce + index.to_bytes(8, byteorder='big')
+
+def framing(file_byte, framesize):
+    frames = []
+    for i in range(0, len(file_byte), framesize):
+        frame = file_byte[i:i + framesize]
+        if len(frame) % 16 != 0:
+            frame = frame + (b'\x00' * (16 - len(frame) % 16))
+        frames.append(frame)
+    return frames
+
+def xor_byte(sq1, sq2):
+    min_len = min(len(sq1), len(sq2))
+    return bytes(a ^ b for a, b in zip(sq1[:min_len], sq2[:min_len]))
+
+def encryption_AES_ECBmode(key, image_frame):
+    encrypted_fames = []
+    cipher = AES.new(key ,AES.MODE_ECB)
+    for frame in image_frame:
+        encrypted_fame = cipher.encrypt(frame)
+        encrypted_fames.append(encrypted_fame)
+    return encrypted_fames
+
+def decryption_AES_ECBmode(key, encrypted_frames):
+    decrypted_frames = []
+    cipher = AES.new(key, AES.MODE_ECB)
+    for encrypted_frame in encrypted_frames:
+        decrypted_frame = cipher.decrypt(encrypted_frame)
+        decrypted_frames.append(decrypted_frame)
+    return decrypted_frames
+
+def encryption_AES_CBCmode(key, image_frames, iv):
+    encrypted_frames = []
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    for frame in image_frames:
+        encrypted_frame = cipher.encrypt(frame)
+        encrypted_frames.append(encrypted_frame)
+    return encrypted_frames
+
+def decryption_AES_CBCmode(key, encrypted_frames, iv):
+    decrypted_frames = []
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    for encrypted_frame in encrypted_frames:
+        decrypted_frame = cipher.decrypt(encrypted_frame)
+        decrypted_frames.append(decrypted_frame)
+    return decrypted_frames
+
+def encryption_AES_CTRmode(key, image_frames):
+    encrypted_frames = []
+    cipher = AES.new(key, AES.MODE_ECB)
+    counter_list = []
+    for i, frame in enumerate(image_frames):
+        encrypted_frame = b''
+        slice_frame = [frame[k:k + 16] for k in range(0, len(frame), 16)]
+        for j, subframe in enumerate(slice_frame):
+            ctr = counter(i * len(slice_frame) + j)
+            encrypted_counter = cipher.encrypt(ctr)
+            counter_list.append(encrypted_counter)
+            encrypted_frame += xor_byte(encrypted_counter, subframe)
+        encrypted_frames.append(encrypted_frame)
+    return encrypted_frames ,counter_list
+
+def decryption_AES_CTRmode(key, encrypted_frames, counter_list):
+    decrypted_frames = []
+    counter_index = 0
+    for i, encrypted_frame in enumerate(encrypted_frames):
+        decrypted_frame = b''
+        slice_frame_enc = [encrypted_frame[k:k + 16] for k in range(0, len(encrypted_frame), 16)]
+        for j, subframe_enc in enumerate(slice_frame_enc):
+            encrypted_counter = counter_list[counter_index]
+            counter_index += 1
+            decrypted_frame += xor_byte(encrypted_counter, subframe_enc)
+        decrypted_frames.append(decrypted_frame)
+    return decrypted_frames
+
+def encryption_AES_OFBmode(key, image_frames,iv):
+    encrypted_byte = b''
+    cipher = AES.new(key, AES.MODE_OFB, iv)
+    for frame in image_frames:
+        encrypted_byte += frame
+    encrypted = cipher.encrypt(encrypted_byte)
+    encrypted_frames = framing(encrypted, 1024)
+    return encrypted_frames
+
+def decryption_AES_OFBmode(key, encrypted_frames, iv):
+    decrypted_byte = b''
+    cipher = AES.new(key, AES.MODE_OFB, iv)
+    for encrypted_frame in encrypted_frames:
+        decrypted_byte += encrypted_frame
+    decrypted = cipher.decrypt(decrypted_byte)
+    decrypted_frames = framing(decrypted, 1024)
+    return decrypted_frames
+
+def encryption_AES_CFBmode(key, image_frames,iv):
+    encrypted_frames = []
+    cipher = AES.new(key, AES.MODE_ECB)
+    for i, frame in enumerate(image_frames):
+        encrypted_frame = b''
+        slice_frame = [frame[k:k + 16] for k in range(0, len(frame), 16)]
+        for j, subframe in enumerate(slice_frame):
+            encrypted_iv = cipher.encrypt(iv)
+            encrypted_frame += xor_byte(encrypted_iv, subframe)
+            iv = encrypted_iv
+        encrypted_frames.append(encrypted_frame)
+    return encrypted_frames
+
+def decryption_AES_CFBmode(key, encrypted_frames, iv):
+    decrypted_frames = []
+    cipher = AES.new(key, AES.MODE_ECB)
+    for i, encrypted_frame in enumerate(encrypted_frames):
+        decrypted_frame = b''
+        slice_frame_enc = [encrypted_frame[k:k + 16] for k in range(0, len(encrypted_frame), 16)]
+        for subframe_enc in slice_frame_enc:
+            encrypted_iv = cipher.encrypt(iv)
+            decrypted_frame += xor_byte(encrypted_iv, subframe_enc)
+            iv = subframe_enc
+        decrypted_frames.append(decrypted_frame)
+    return decrypted_frames
+
+def encrypt_frame_to_file(encrypted_data, cipher_path, mode):
+    with open(cipher_path, 'a') as cipher_file:
+        cipher_file.write(mode + '\n')
+    cipher_file.close()
+    encrypted_frames = []
+    for i, data in enumerate(encrypted_data):
+        counter_value = counter(i)
+        result = counter_value + data
+        bit_string = ''.join(format(byte, '08b') for byte in result)
+        encrypted_frames.append(result)
+        with open(cipher_path, 'a') as cipher_file:
+            cipher_file.write(bit_string + '\n')
+    print('Encrypted data is saved!')
+    return encrypted_frames
+
+def remove_headers(encrypted_image_frame):
+    headers = []
+    datas = []
+    header_length = 16
+
+    for frame_enc in encrypted_image_frame:
+        header = frame_enc[:header_length]
+        data = frame_enc[header_length:]
+        headers.append(header)
+        datas.append(data)
+    return headers, datas
+
+def encrypted_data(cipher_path):
+    file_byte = open_file_byte(cipher_path)
+    file_frame = framing(file_byte ,1040)
+    header ,encrypted_data = remove_headers(file_frame)
+    return encrypted_data
+
+def add_to_file(plain_path, strings):
+    with open(plain_path, 'a') as plain_file:
+        plain_file.write(strings + '\n')
+    print('decrypted data is saved!')
+
+parser = argparse.ArgumentParser(description='AES encryption/decryption tool with different type of operation modes')
+parser.add_argument('--mode',choices=['encrypt', 'decrypt'], help='please chose a mode')
+parser.add_argument('--operation', choices=['cbc','ctr','ofb','cfb','ecb'], help='please chose a cryptography mode for AES')
+parser.add_argument('-key', help='enter the key path file')
+parser.add_argument('-iv', help='enter the iv path file')
+parser.add_argument('-file', help='enter the file path file')
+
+args = parser.parse_args()
+key_byte = open_file_byte(args.key)
+iv = open_file_byte(args.iv)
+plain_byte = open_file_byte(args.file)
+plain_frame = framing(plain_byte ,1024)
+enc_ctr, counter_list = encryption_AES_CTRmode(key_byte, plain_frame)
+
+if args.mode == 'encrypt' and args.operation == 'cbc':
+    enc_cbc = encryption_AES_CBCmode(key_byte, plain_frame, iv)
+    cbc = encrypt_frame_to_file(enc_cbc, cipher_path, 'cbc')
+
+if args.mode == 'encrypt' and args.operation == 'ctr':
+    enc_ctr, counter_list = encryption_AES_CTRmode(key_byte, plain_frame)
+    ctr = encrypt_frame_to_file(enc_ctr, cipher_path, 'ctr')
+
+if args.mode == 'encrypt' and args.operation == 'ofb':
+    enc_ofb = encryption_AES_OFBmode(key_byte, plain_frame, iv)
+    ofb = encrypt_frame_to_file(enc_ofb, cipher_path, 'ofb')
+
+if args.mode == 'encrypt' and args.operation == 'cfb':
+    enc_cfb = encryption_AES_CFBmode(key_byte, plain_frame, iv)
+    cfb = encrypt_frame_to_file(enc_cfb, cipher_path, 'cfb')
+
+if args.mode == 'encrypt' and args.operation == 'ecb':
+    enc_ecb = encryption_AES_ECBmode(key_byte, plain_frame)
+    ecb = encrypt_frame_to_file(enc_ecb, cipher_path, 'ecb')
+
+if args.mode == 'decrypt' and args.operation == 'cbc':
+    dec_cbc = decryption_AES_CBCmode(key_byte, encrypted_data(cipher_path), iv)
+    decrypted_data = b''.join(dec_cbc)
+    cbc_string = bin(int.from_bytes(decrypted_data, 'big'))[2:].zfill(len(decrypted_data) * 8)
+    b = add_to_file(plain_path, cbc_string)
+
+if args.mode == 'decrypt' and args.operation == 'ctr':
+    dec_ctr = decryption_AES_CTRmode(key_byte, encrypted_data(cipher_path), counter_list)
+    decrypted_data_ctr = b''.join(dec_ctr)
+    ctr_string = bin(int.from_bytes(decrypted_data_ctr, 'big'))[2:].zfill(len(decrypted_data_ctr) * 8)
+    b = add_to_file(plain_path, ctr_string)
+
+if args.mode == 'decrypt' and args.operation == 'ofb':
+    dec_ofb = decryption_AES_OFBmode(key_byte, encrypted_data(cipher_path), iv)
+    decrypted_data = b''.join(dec_ofb)
+    ofb_string = bin(int.from_bytes(decrypted_data, 'big'))[2:].zfill(len(decrypted_data) * 8)
+    b = add_to_file(plain_path, ofb_string)
+
+if args.mode == 'decrypt' and args.operation == 'cfb':
+    dec_cfb = decryption_AES_CFBmode(key_byte, encrypted_data(cipher_path), iv)
+    decrypted_data = b''.join(dec_cfb)
+    cfb_string = bin(int.from_bytes(decrypted_data, 'big'))[2:].zfill(len(decrypted_data) * 8)
+    b = add_to_file(plain_path, cfb_string)
+
+if args.mode == 'decrypt' and args.operation == 'ecb':
+    dec_ecb = decryption_AES_ECBmode(key_byte, encrypted_data(cipher_path))
+    decrypted_data = b''.join(dec_ecb)
+    ecb_string = bin(int.from_bytes(decrypted_data, 'big'))[2:].zfill(len(decrypted_data) * 8)
+    b = add_to_file(plain_path, ecb_string)
